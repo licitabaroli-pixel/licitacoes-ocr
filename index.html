@@ -74,36 +74,53 @@
   <script>
     const RAMOS = ['Empresarial', 'Frota', 'Vida', 'Garantia', 'Transportes', 'D&O', 'RC Ambiental'];
     let licitacoes = [];
+    const pdfMap = new Map(); // guarda ObjectURLs temporários na sessão
 
     function formatarDataParaInput(dataPtBr) {
       const [d, m, a] = dataPtBr.split('/');
       return `${a}-${m}-${d}`;
     }
 
+    function normalizarTexto(texto) {
+      return texto.replace(/-\s*\n/g, '') // remove hifenização de quebra de linha
+                  .replace(/\s+/g, ' ')   // normaliza espaços
+                  .trim();
+    }
+
     function detectarRamo(texto) {
       for (const ramo of RAMOS) {
-        const regex = new RegExp(ramo, 'i');
+        const regex = new RegExp(`\\b${ramo}\\b`, 'i');
         if (regex.test(texto)) return ramo;
       }
       return '';
     }
 
-    function detectarQuantidade(texto, ramo) {
-      const match = texto.match(/(\d{1,5})\s+(itens?|ve[íi]culos|segurados|riscos|ap[oó]lices)/i);
+    function detectarQuantidade(texto) {
+      if (/único item/i.test(texto)) return '1';
+      const match = texto.match(/(\d{1,5})\s+(?:itens?|ve[íi]culos|segurados|riscos|ap[oó]lices)/i);
       return match ? match[1] : '';
     }
 
-    function extrairCamposDoTexto(texto) {
-      console.log("🔍 Texto extraído (prévia):", texto.slice(0, 500));
+    function aplicarMascaraCNPJ(cnpj) {
+      return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+    }
 
-      const numeroLicitacao = texto.match(/(?:Preg[aã]o|Concorr[eê]ncia|Tomada de Pre[cç]os|Convite)\s*(?:n[ºo.]*)?\s*\d{1,5}\/\d{2,4}/i);
-      const cnpj = texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/); // formato fixo
-      const email = texto.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/);
-      const telefone = texto.match(/\(\d{2}\)\s?\d{4,5}-\d{4}/); // telefone padronizado
-      const data = texto.match(/\d{2}\/\d{2}\/\d{4}/);
-      const orgao = texto.match(/(Prefeitura|Secretaria|Tribunal|Governo)[^\n]{0,100}/i);
-      const ramo = detectarRamo(texto);
-      const quantidade = detectarQuantidade(texto, ramo);
+    function aplicarMascaraTelefone(tel) {
+      return tel.replace(/^(\d{2})(\d{4,5})(\d{4})$/, "($1) $2-$3");
+    }
+
+    function extrairCamposDoTexto(texto) {
+      const clean = normalizarTexto(texto);
+      console.log("🔍 Texto normalizado (prévia):", clean.slice(0, 500));
+
+      const numeroLicitacao = clean.match(/\b\d{4,6}\/\d{4}\b/);
+      const cnpj = clean.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/);
+      const email = clean.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/);
+      const telefone = clean.match(/\(\d{2}\)\s?\d{4,5}-\d{4}/);
+      const data = clean.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
+      const orgao = clean.match(/(Fundação|Prefeitura|Secretaria|Tribunal|Governo)[^\n]{0,100}/i);
+      const ramo = detectarRamo(clean);
+      const quantidade = detectarQuantidade(clean);
 
       if (numeroLicitacao) document.getElementById('numeroLicitacao').value = numeroLicitacao[0];
       if (cnpj) document.getElementById('cnpj').value = cnpj[0];
@@ -166,36 +183,37 @@
         return;
       }
 
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const base64PDF = e.target.result;
+      const url = URL.createObjectURL(file);
 
-        const nova = {
-          numero: document.getElementById('numeroLicitacao').value,
-          data: document.getElementById('dataAbertura').value,
-          orgao: document.getElementById('nomeOrgao').value,
-          cnpj: document.getElementById('cnpj').value,
-          email: document.getElementById('email').value,
-          telefone: document.getElementById('telefone').value,
-          ramo: document.getElementById('ramo').value,
-          itens: document.getElementById('quantidadeItens').value,
-          edital: base64PDF
-        };
-
-        // validação mínima
-        if (!nova.numero || !nova.data || !nova.orgao) {
-          alert("Preencha os campos principais antes de salvar!");
-          return;
-        }
-
-        licitacoes.push(nova);
-        salvarLocal();
-        atualizarTabela();
-        document.getElementById('formulario').reset();
-        document.getElementById('pdfInput').value = ""; // limpa o arquivo selecionado
+      const nova = {
+        numero: document.getElementById('numeroLicitacao').value,
+        data: document.getElementById('dataAbertura').value,
+        orgao: document.getElementById('nomeOrgao').value,
+        cnpj: document.getElementById('cnpj').value.replace(/\D/g, '').length === 14 ? aplicarMascaraCNPJ(document.getElementById('cnpj').value.replace(/\D/g,'')) : document.getElementById('cnpj').value,
+        email: document.getElementById('email').value,
+        telefone: document.getElementById('telefone').value.replace(/\D/g, '').length >= 10 ? aplicarMascaraTelefone(document.getElementById('telefone').value.replace(/\D/g,'')) : document.getElementById('telefone').value,
+        ramo: document.getElementById('ramo').value,
+        itens: document.getElementById('quantidadeItens').value,
+        editalId: Date.now() // id temporário para mapear URL
       };
 
-      reader.readAsDataURL(file);
+      if (!nova.numero || !nova.data || !nova.orgao) {
+        alert("Preencha os campos principais antes de salvar!");
+        return;
+      }
+
+      licitacoes.push(nova);
+      pdfMap.set(nova.editalId, url);
+
+      try {
+        salvarLocal();
+      } catch (e) {
+        console.warn("⚠️ Limite do localStorage atingido, não foi possível salvar permanentemente:", e);
+      }
+
+      atualizarTabela();
+      document.getElementById('formulario').reset();
+      document.getElementById('pdfInput').value = "";
     }
 
     function atualizarTabela() {
@@ -205,7 +223,9 @@
         return;
       }
 
-      tbody.innerHTML = licitacoes.map(l => `
+      tbody.innerHTML = licitacoes.map(l => {
+        const url = pdfMap.get(l.editalId);
+        return `
         <tr>
           <td>${l.numero}</td>
           <td>${l.data}</td>
@@ -215,9 +235,10 @@
           <td>${l.telefone}</td>
           <td>${l.ramo}</td>
           <td>${l.itens}</td>
-          <td><a href="${l.edital}" target="_blank">📄 Abrir edital</a></td>
+          <td>${url ? `<a href="${url}" target="_blank">📄 Abrir edital</a>` : '<span style="color:red">⚠️ PDF não disponível após reload</span>'}</td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     }
 
     function salvarLocal() {
