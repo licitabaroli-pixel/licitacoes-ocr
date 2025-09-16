@@ -14,6 +14,9 @@
   <hr />
 
   <form id="formulario">
+    <label>Nº da Licitação:</label><br />
+    <input type="text" id="numeroLicitacao" /><br /><br />
+
     <label>Data de Abertura:</label><br />
     <input type="date" id="dataAbertura" /><br /><br />
 
@@ -52,10 +55,18 @@
   <table border="1" width="100%" id="tabela">
     <thead>
       <tr>
-        <th>Data</th><th>Órgão</th><th>CNPJ</th><th>Email</th><th>Telefone</th><th>Ramo</th><th>Qtd. Itens</th>
+        <th>Nº Licitação</th>
+        <th>Data</th>
+        <th>Órgão</th>
+        <th>CNPJ</th>
+        <th>Email</th>
+        <th>Telefone</th>
+        <th>Ramo</th>
+        <th>Qtd. Itens</th>
+        <th>Edital</th>
       </tr>
     </thead>
-    <tbody id="corpoTabela"><tr><td colspan="7">Nenhuma licitação ainda.</td></tr></tbody>
+    <tbody id="corpoTabela"><tr><td colspan="9">Nenhuma licitação ainda.</td></tr></tbody>
   </table>
 
   <canvas id="pdfCanvas" style="display:none;"></canvas>
@@ -88,7 +99,10 @@
     }
 
     function extrairCamposDoTexto(texto) {
-      const cnpj = texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+      console.log("🔍 Texto extraído (prévia):", texto.slice(0, 500));
+
+      const numeroLicitacao = texto.match(/(Preg[aã]o|Concorr[eê]ncia|Tomada de Pre[cç]os|Convite)\s*(n[ºo.]*)?\s*\d{1,4}\/\d{4}/i);
+      const cnpj = texto.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/);
       const email = texto.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/);
       const telefone = texto.match(/\(?\d{2}\)?[\s-]?\d{4,5}-?\d{4}/);
       const data = texto.match(/\d{2}\/\d{2}\/\d{4}/);
@@ -96,6 +110,7 @@
       const ramo = detectarRamo(texto);
       const quantidade = detectarQuantidade(texto, ramo);
 
+      if (numeroLicitacao) document.getElementById('numeroLicitacao').value = numeroLicitacao[0];
       if (cnpj) document.getElementById('cnpj').value = cnpj[0];
       if (email) document.getElementById('email').value = email[0];
       if (telefone) document.getElementById('telefone').value = telefone[0];
@@ -107,14 +122,14 @@
 
     async function processarComOCR(page) {
       const canvas = document.getElementById('pdfCanvas');
-      const viewport = page.getViewport({ scale: 2.5 });
+      const viewport = page.getViewport({ scale: 3.5 });
       const context = canvas.getContext('2d');
 
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       await page.render({ canvasContext: context, viewport: viewport }).promise;
 
-      const { data: { text } } = await Tesseract.recognize(canvas, 'por', {
+      const { data: { text } } = await Tesseract.recognize(canvas, 'por+eng', {
         logger: m => console.log(m)
       });
 
@@ -124,16 +139,21 @@
     async function processarPDF(file) {
       const typedArray = new Uint8Array(await file.arrayBuffer());
       const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
-      const page = await pdf.getPage(1);
+      let textoCompleto = "";
 
-      let textContent = await page.getTextContent();
-      let texto = textContent.items.map(item => item.str).join(' ');
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const textoPagina = textContent.items.map(item => item.str).join(" ");
+        textoCompleto += " " + textoPagina;
+      }
 
-      if (texto.trim().length < 20) {
-        console.log('📸 Texto não encontrado, usando OCR...');
+      if (textoCompleto.trim().length < 20) {
+        console.log("📸 Texto não encontrado, usando OCR...");
+        const page = await pdf.getPage(1);
         await processarComOCR(page);
       } else {
-        extrairCamposDoTexto(texto);
+        extrairCamposDoTexto(textoCompleto);
       }
     }
 
@@ -143,31 +163,49 @@
     });
 
     function adicionarLicitacao() {
-      const nova = {
-        data: document.getElementById('dataAbertura').value,
-        orgao: document.getElementById('nomeOrgao').value,
-        cnpj: document.getElementById('cnpj').value,
-        email: document.getElementById('email').value,
-        telefone: document.getElementById('telefone').value,
-        ramo: document.getElementById('ramo').value,
-        itens: document.getElementById('quantidadeItens').value,
+      const fileInput = document.getElementById('pdfInput');
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("Selecione um edital antes de adicionar!");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64PDF = e.target.result;
+
+        const nova = {
+          numero: document.getElementById('numeroLicitacao').value,
+          data: document.getElementById('dataAbertura').value,
+          orgao: document.getElementById('nomeOrgao').value,
+          cnpj: document.getElementById('cnpj').value,
+          email: document.getElementById('email').value,
+          telefone: document.getElementById('telefone').value,
+          ramo: document.getElementById('ramo').value,
+          itens: document.getElementById('quantidadeItens').value,
+          edital: base64PDF
+        };
+
+        licitacoes.push(nova);
+        salvarLocal();
+        atualizarTabela();
+        document.getElementById('formulario').reset();
       };
 
-      licitacoes.push(nova);
-      salvarLocal();
-      atualizarTabela();
-      document.getElementById('formulario').reset();
+      reader.readAsDataURL(file);
     }
 
     function atualizarTabela() {
       const tbody = document.getElementById('corpoTabela');
       if (licitacoes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7">Nenhuma licitação ainda.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9">Nenhuma licitação ainda.</td></tr>';
         return;
       }
 
       tbody.innerHTML = licitacoes.map(l => `
         <tr>
+          <td>${l.numero}</td>
           <td>${l.data}</td>
           <td>${l.orgao}</td>
           <td>${l.cnpj}</td>
@@ -175,6 +213,7 @@
           <td>${l.telefone}</td>
           <td>${l.ramo}</td>
           <td>${l.itens}</td>
+          <td><a href="${l.edital}" target="_blank">📄 Abrir edital</a></td>
         </tr>
       `).join('');
     }
@@ -195,3 +234,5 @@
   </script>
 </body>
 </html>
+
+
