@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Licitações com OCR</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+</head>
+<body style="font-family:sans-serif;padding:20px;background:#f4f4f4">
+
+  <h2>📋 Sistema de Licitações (com OCR)</h2>
+
+  <input type="file" id="pdfInput" accept="application/pdf" />
+  <hr />
+
+  <form id="formulario">
+    <label>Data de Abertura:</label><br />
+    <input type="date" id="dataAbertura" /><br /><br />
+
+    <label>Nome do Órgão:</label><br />
+    <input type="text" id="nomeOrgao" /><br /><br />
+
+    <label>CNPJ:</label><br />
+    <input type="text" id="cnpj" /><br /><br />
+
+    <label>E-mail:</label><br />
+    <input type="email" id="email" /><br /><br />
+
+    <label>Telefone:</label><br />
+    <input type="tel" id="telefone" /><br /><br />
+
+    <label>Ramo:</label><br />
+    <select id="ramo">
+      <option value="">Selecione...</option>
+      <option value="Empresarial">Empresarial</option>
+      <option value="Frota">Frota</option>
+      <option value="Vida">Vida</option>
+      <option value="Garantia">Garantia</option>
+      <option value="Transportes">Transportes</option>
+      <option value="D&O">D&O</option>
+      <option value="RC Ambiental">RC Ambiental</option>
+    </select><br /><br />
+
+    <label>Qtd. Itens:</label><br />
+    <input type="text" id="quantidadeItens" /><br /><br />
+
+    <button type="button" onclick="adicionarLicitacao()">➕ Adicionar</button>
+  </form>
+
+  <hr />
+  <h3>📑 Licitações</h3>
+  <table border="1" width="100%" id="tabela">
+    <thead>
+      <tr>
+        <th>Data</th><th>Órgão</th><th>CNPJ</th><th>Email</th><th>Telefone</th><th>Ramo</th><th>Qtd. Itens</th>
+      </tr>
+    </thead>
+    <tbody id="corpoTabela"><tr><td colspan="7">Nenhuma licitação ainda.</td></tr></tbody>
+  </table>
+
+  <canvas id="pdfCanvas" style="display:none;"></canvas>
+
+  <script>
+    const RAMOS = ['Empresarial', 'Frota', 'Vida', 'Garantia', 'Transportes', 'D&O', 'RC Ambiental'];
+    let licitacoes = [];
+
+    function formatarDataParaInput(dataPtBr) {
+      const [d, m, a] = dataPtBr.split('/');
+      return `${a}-${m}-${d}`;
+    }
+
+    function detectarRamo(texto) {
+      for (const ramo of RAMOS) {
+        const regex = new RegExp(ramo, 'i');
+        if (regex.test(texto)) return ramo;
+      }
+      return '';
+    }
+
+    function detectarQuantidade(texto, ramo) {
+      if (ramo === 'Empresarial') {
+        const enderecos = texto.match(/(Rua|Av\.?|Avenida|Travessa|Rodovia|Estrada)[^\n,]+,\s*n?[0-9]+/gi);
+        return enderecos ? enderecos.length : 1;
+      } else {
+        const match = texto.match(/(\d{1,4})\s+(ve[íi]culos|itens|segurados|riscos|ap[oó]lices)/i);
+        return match ? match[1] : '';
+      }
+    }
+
+    function extrairCamposDoTexto(texto) {
+      const cnpj = texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
+      const email = texto.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/);
+      const telefone = texto.match(/\(?\d{2}\)?[\s-]?\d{4,5}-?\d{4}/);
+      const data = texto.match(/\d{2}\/\d{2}\/\d{4}/);
+      const orgao = texto.match(/(Prefeitura|Secretaria|Tribunal|Governo)[^\n]{0,100}/i);
+      const ramo = detectarRamo(texto);
+      const quantidade = detectarQuantidade(texto, ramo);
+
+      if (cnpj) document.getElementById('cnpj').value = cnpj[0];
+      if (email) document.getElementById('email').value = email[0];
+      if (telefone) document.getElementById('telefone').value = telefone[0];
+      if (data) document.getElementById('dataAbertura').value = formatarDataParaInput(data[0]);
+      if (orgao) document.getElementById('nomeOrgao').value = orgao[0].trim();
+      if (ramo) document.getElementById('ramo').value = ramo;
+      if (quantidade) document.getElementById('quantidadeItens').value = quantidade;
+    }
+
+    async function processarComOCR(page) {
+      const canvas = document.getElementById('pdfCanvas');
+      const viewport = page.getViewport({ scale: 2.5 });
+      const context = canvas.getContext('2d');
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+      const { data: { text } } = await Tesseract.recognize(canvas, 'por', {
+        logger: m => console.log(m)
+      });
+
+      extrairCamposDoTexto(text);
+    }
+
+    async function processarPDF(file) {
+      const typedArray = new Uint8Array(await file.arrayBuffer());
+      const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
+      const page = await pdf.getPage(1);
+
+      let textContent = await page.getTextContent();
+      let texto = textContent.items.map(item => item.str).join(' ');
+
+      if (texto.trim().length < 20) {
+        console.log('📸 Texto não encontrado, usando OCR...');
+        await processarComOCR(page);
+      } else {
+        extrairCamposDoTexto(texto);
+      }
+    }
+
+    document.getElementById('pdfInput').addEventListener('change', function (e) {
+      const file = e.target.files[0];
+      if (file) processarPDF(file);
+    });
+
+    function adicionarLicitacao() {
+      const nova = {
+        data: document.getElementById('dataAbertura').value,
+        orgao: document.getElementById('nomeOrgao').value,
+        cnpj: document.getElementById('cnpj').value,
+        email: document.getElementById('email').value,
+        telefone: document.getElementById('telefone').value,
+        ramo: document.getElementById('ramo').value,
+        itens: document.getElementById('quantidadeItens').value,
+      };
+
+      licitacoes.push(nova);
+      salvarLocal();
+      atualizarTabela();
+      document.getElementById('formulario').reset();
+    }
+
+    function atualizarTabela() {
+      const tbody = document.getElementById('corpoTabela');
+      if (licitacoes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7">Nenhuma licitação ainda.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = licitacoes.map(l => `
+        <tr>
+          <td>${l.data}</td>
+          <td>${l.orgao}</td>
+          <td>${l.cnpj}</td>
+          <td>${l.email}</td>
+          <td>${l.telefone}</td>
+          <td>${l.ramo}</td>
+          <td>${l.itens}</td>
+        </tr>
+      `).join('');
+    }
+
+    function salvarLocal() {
+      localStorage.setItem('licitacoes', JSON.stringify(licitacoes));
+    }
+
+    function carregarLocal() {
+      const dados = localStorage.getItem('licitacoes');
+      if (dados) {
+        licitacoes = JSON.parse(dados);
+        atualizarTabela();
+      }
+    }
+
+    carregarLocal();
+  </script>
+</body>
+</html>
