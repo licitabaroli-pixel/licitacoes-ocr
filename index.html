@@ -89,22 +89,17 @@
     }
 
     function detectarQuantidade(texto, ramo) {
-      if (ramo === 'Empresarial') {
-        const enderecos = texto.match(/(Rua|Av\.?|Avenida|Travessa|Rodovia|Estrada)[^\n,]+,\s*n?[0-9]+/gi);
-        return enderecos ? enderecos.length : 1;
-      } else {
-        const match = texto.match(/(\d{1,4})\s+(ve[íi]culos|itens|segurados|riscos|ap[oó]lices)/i);
-        return match ? match[1] : '';
-      }
+      const match = texto.match(/(\d{1,5})\s+(itens?|ve[íi]culos|segurados|riscos|ap[oó]lices)/i);
+      return match ? match[1] : '';
     }
 
     function extrairCamposDoTexto(texto) {
       console.log("🔍 Texto extraído (prévia):", texto.slice(0, 500));
 
-      const numeroLicitacao = texto.match(/(Preg[aã]o|Concorr[eê]ncia|Tomada de Pre[cç]os|Convite)\s*(n[ºo.]*)?\s*\d{1,4}\/\d{4}/i);
-      const cnpj = texto.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/);
+      const numeroLicitacao = texto.match(/(?:Preg[aã]o|Concorr[eê]ncia|Tomada de Pre[cç]os|Convite)\s*(?:n[ºo.]*)?\s*\d{1,5}\/\d{2,4}/i);
+      const cnpj = texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/); // formato fixo
       const email = texto.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/);
-      const telefone = texto.match(/\(?\d{2}\)?[\s-]?\d{4,5}-?\d{4}/);
+      const telefone = texto.match(/\(\d{2}\)\s?\d{4,5}-\d{4}/); // telefone padronizado
       const data = texto.match(/\d{2}\/\d{2}\/\d{4}/);
       const orgao = texto.match(/(Prefeitura|Secretaria|Tribunal|Governo)[^\n]{0,100}/i);
       const ramo = detectarRamo(texto);
@@ -129,9 +124,9 @@
       canvas.height = viewport.height;
       await page.render({ canvasContext: context, viewport: viewport }).promise;
 
-      const { data: { text } } = await Tesseract.recognize(canvas, 'por+eng', {
-        logger: m => console.log(m)
-      });
+      document.body.style.cursor = "wait";
+      const { data: { text } } = await Tesseract.recognize(canvas, 'por+eng');
+      document.body.style.cursor = "default";
 
       extrairCamposDoTexto(text);
     }
@@ -187,10 +182,17 @@
           edital: base64PDF
         };
 
+        // validação mínima
+        if (!nova.numero || !nova.data || !nova.orgao) {
+          alert("Preencha os campos principais antes de salvar!");
+          return;
+        }
+
         licitacoes.push(nova);
         salvarLocal();
         atualizarTabela();
         document.getElementById('formulario').reset();
+        document.getElementById('pdfInput').value = ""; // limpa o arquivo selecionado
       };
 
       reader.readAsDataURL(file);
@@ -234,5 +236,3 @@
   </script>
 </body>
 </html>
-
-
